@@ -1,12 +1,12 @@
 #include "xmutex.h"
-#include "xplatformdef.h"
+#include "logger.h"
 
-#if !defined(X_PLAT_OS_WIN)
+#if !defined(LOG_OS_WIN)
 #import <pthread.h>
 #endif
 
 Mutex::Mutex() {
-#if defined(X_PLAT_OS_WIN)
+#if defined(LOG_OS_WIN)
 	InitializeCriticalSection( &TheCS );
 #else
 	pthread_mutex_init( &TheMutex, NULL );      
@@ -14,7 +14,7 @@ Mutex::Mutex() {
 }
 
 Mutex::~Mutex() {
-#if defined(X_PLAT_OS_WIN)
+#if defined(LOG_OS_WIN)
 	DeleteCriticalSection( &TheCS );
 #else
 	pthread_mutex_destroy( &TheMutex );
@@ -22,7 +22,7 @@ Mutex::~Mutex() {
     }
 
 void Mutex::lock() {
-#if defined(X_PLAT_OS_WIN)
+#if defined(LOG_OS_WIN)
 	if ( !TryEnterCriticalSection( &TheCS ) ) 
 		EnterCriticalSection( &TheCS );
 #else
@@ -31,7 +31,7 @@ void Mutex::lock() {
     }
 
 void Mutex::unlock() {
-#if defined(X_PLAT_OS_WIN)
+#if defined(LOG_OS_WIN)
 	LeaveCriticalSection( &TheCS );
 #else
 	pthread_mutex_unlock( &TheMutex );

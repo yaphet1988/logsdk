@@ -7,6 +7,7 @@
 #else
 #include <sys/time.h>
 #include <sys/utsname.h>
+#include <unistd.h>
 #endif
 
 static int32_t k_xutil_pid = 0;

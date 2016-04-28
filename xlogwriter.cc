@@ -9,6 +9,7 @@
 #include <time.h>
 #include <sys/utime.h>
 #else
+#include <unistd.h>
 #include <sys/time.h>
 #endif
 
@@ -39,6 +40,7 @@ void* _TaskThread(void* pParam)
 XLogWriter::XLogWriter()
 : m_pLogFile(NULL)
 , m_hThread(NULL)
+, m_iLogSize(0)
 {}
 
 XLogWriter::~XLogWriter()
@@ -79,25 +81,9 @@ void XLogWriter::Release()
 int XLogWriter::init(const xlog::InitInfo& ini)
 {
 	m_ini = ini;
-	std::ostringstream logFileNameStream;
-	logFileNameStream.fill('0');
-	if (!ini.log_dir.empty())
-		logFileNameStream << ini.log_dir << "/";
-
-	time_t _nowsec = time(NULL);
-	struct tm* pTm = localtime(&_nowsec);
-	logFileNameStream << xutil_gethostname() << "." << xutil_getpid() << "."
-	<< pTm->tm_year+1900
-	<< std::setw(2) << pTm->tm_mon+1
-	<< std::setw(2) << pTm->tm_mday
-	<< "-"
-	<< std::setw(2) << pTm->tm_hour
-	<< std::setw(2) << pTm->tm_min
-	<< std::setw(2) << pTm->tm_sec << ".log";
-	//OutputDebugStringA(logFileNameStream.str().c_str());
-	m_pLogFile = fopen(logFileNameStream.str().c_str(), "wb+");
-	if (!m_pLogFile)
-		return xlog::RES_ERROR_OPEN_LOG_FAIL;
+	int ret = create_log_file();
+	if ( xlog::RES_NO_ERROR != ret )
+		return ret;
 	
 	if ( xlog::InitInfo::LOG_MODE_ASYNC == ini.log_mode )
 		return this->start();
@@ -115,15 +101,31 @@ int XLogWriter::write_log(const std::string& levelstr, const std::string& log)
 		k_mutex.unlock();
 		return xlog::RES_ERROR_NO_LOGFILE;
 	}
+
+	if ( (m_iLogSize >> 20) >= m_ini.log_max_size_MB ) //too large for a single file
+	{
+		if (m_pLogFile)
+		{
+			fclose(m_pLogFile);
+			m_pLogFile = NULL;
+		}
+		m_iLogSize = 0;
+		create_log_file(); //create a new one to continue
+	}
+	
 	if ( xlog::InitInfo::LOG_MODE_SYNC == m_ini.log_mode )
 	{
 		fwrite(format_log.c_str(), format_log.size(), 1, m_pLogFile);
 		fflush(m_pLogFile);
-        //write to debug console
-        fwrite(format_log.c_str(), format_log.size(), 1, stderr);
-        #if defined(LOG_OS_WIN)
-            OutputDebugStringA(format_log.c_str());
-        #endif
+		m_iLogSize += format_log.size();
+		if ( m_ini.also_log_to_stderr ) //log to console for debug
+		{
+			#if defined(LOG_OS_WIN)
+				OutputDebugStringA(format_log.c_str());
+			#else
+				fwrite(format_log.c_str(), format_log.size(), 1, stderr);
+			#endif
+		}
 	}
 	else
 	{
@@ -150,16 +152,45 @@ void XLogWriter::run()
 		for ( log_cache_t::iterator io = m_logCache.begin(); io != m_logCache.end(); ++io )
 		{
             fwrite(io->c_str(), io->size(), 1, m_pLogFile);
-            //write to debug console
-            fwrite(io->c_str(), io->size(), 1, stderr);
-            #if defined(LOG_OS_WIN)
-                OutputDebugStringA(io->c_str());
-            #endif
+			m_iLogSize += io->size();
+			if ( m_ini.also_log_to_stderr )
+			{
+				#if defined(LOG_OS_WIN)
+					OutputDebugStringA(io->c_str());
+				#else
+					fwrite(io->c_str(), io->size(), 1, stderr);
+				#endif
+			}
 		}
 		m_logCache.clear();
 		fflush(m_pLogFile);
 		k_mutex.unlock();
 	}
+}
+
+int XLogWriter::create_log_file()
+{
+	std::ostringstream logFileNameStream;
+	logFileNameStream.fill('0');
+	if ( !m_ini.log_dir.empty() )
+		logFileNameStream << m_ini.log_dir << "/";
+
+	time_t _nowsec = time(NULL);
+	struct tm* pTm = localtime(&_nowsec);
+	logFileNameStream << xutil_gethostname() << "." << xutil_getpid() << "."
+	<< pTm->tm_year+1900
+	<< std::setw(2) << pTm->tm_mon+1
+	<< std::setw(2) << pTm->tm_mday
+	<< "-"
+	<< std::setw(2) << pTm->tm_hour
+	<< std::setw(2) << pTm->tm_min
+	<< std::setw(2) << pTm->tm_sec << ".log";
+	//OutputDebugStringA(logFileNameStream.str().c_str());
+	m_pLogFile = fopen(logFileNameStream.str().c_str(), "wb+");
+	if (!m_pLogFile)
+		return xlog::RES_ERROR_OPEN_LOG_FAIL;
+
+	return xlog::RES_NO_ERROR;
 }
 
 int XLogWriter::start()
@@ -200,8 +231,10 @@ int XLogWriter::stop()
 	}
 	CloseHandle(m_hThread);
 	m_hThread = NULL;
-#else
+#elif defined(LOG_OS_APPLE)
 	pthread_cancel(m_hThread);
+#elif defined(LOG_OS_ANDROID)
+    pthread_join(m_hThread, NULL);
 #endif
 	return xlog::RES_NO_ERROR;
 }

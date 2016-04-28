@@ -25,6 +25,7 @@ private:
 	XLogWriter();
 	~XLogWriter();
 
+	int create_log_file();
 	int start(); //Async mode, thread
 	int stop(); //Async mode, thread
 	void sleep(int millsecs);
@@ -36,6 +37,7 @@ private:
 	xlog::InitInfo	m_ini;
 	log_cache_t	m_logCache;
 	FILE*		m_pLogFile;
+	size_t		m_iLogSize;
 
 #if defined(LOG_OS_WIN)
 	HANDLE		m_hThread;

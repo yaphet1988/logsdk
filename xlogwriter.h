@@ -26,6 +26,7 @@ private:
 	~XLogWriter();
 
 	int create_log_file();
+    int delete_expire_log_files();
 	int start(); //Async mode, thread
 	int stop(); //Async mode, thread
 	void sleep(int millsecs);

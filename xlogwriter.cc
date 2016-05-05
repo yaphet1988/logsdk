@@ -5,12 +5,17 @@
 #include <string>
 #include <sstream>
 #include <iomanip>
+#include <vector>
+#include <map>
+#include <sys/stat.h>
 #if defined(LOG_OS_WIN)
 #include <time.h>
 #include <sys/utime.h>
+#include <io.h>
 #else
 #include <unistd.h>
 #include <sys/time.h>
+#include <dirent.h>
 #endif
 
 Mutex k_mutex;
@@ -81,6 +86,7 @@ void XLogWriter::Release()
 int XLogWriter::init(const xlog::InitInfo& ini)
 {
 	m_ini = ini;
+    delete_expire_log_files();
 	int ret = create_log_file();
 	if ( xlog::RES_NO_ERROR != ret )
 		return ret;
@@ -191,6 +197,61 @@ int XLogWriter::create_log_file()
 		return xlog::RES_ERROR_OPEN_LOG_FAIL;
 
 	return xlog::RES_NO_ERROR;
+}
+
+int XLogWriter::delete_expire_log_files()
+{
+    std::vector<std::string> fileList;
+#if defined(LOG_OS_WIN)
+	_finddata_t dirFileInfo;
+	std::string filePattern;
+	filePattern.append(m_ini.log_dir).append("\\*.*");
+	long handle = _findfirst(filePattern.c_str(), &dirFileInfo);
+	if ( -1L == handle )
+		return xlog::RES_NO_ERROR;
+	while ( 0 == _findnext(handle, &dirFileInfo) )
+	{
+		if ( strstr(dirFileInfo.name, ".log") )
+			fileList.push_back(dirFileInfo.name);
+	}
+#else
+    DIR* pDir = opendir(m_ini.log_dir.c_str());
+    if (!pDir)
+        return xlog::RES_NO_ERROR;
+    struct dirent *pDirEntry = NULL;
+    while( pDirEntry = readdir(pDir) )
+    {
+        if ( strstr(pDirEntry->d_name, ".log") )
+            fileList.push_back(pDirEntry->d_name);
+    }
+    closedir(pDir);
+#endif
+    std::map<time_t, std::string> ctime_2_filename_map;
+    for ( std::vector<std::string>::iterator io = fileList.begin(); io != fileList.end(); ++io )
+    {
+        std::string filename;
+        filename.append(m_ini.log_dir).append("/").append(io->c_str());
+        struct stat fileinfo;
+        if ( 0 != stat(filename.c_str(), &fileinfo) )
+            continue;
+#if defined(LOG_OS_APPLE)
+        ctime_2_filename_map[fileinfo.st_birthtimespec.tv_sec] = filename;
+#else
+		ctime_2_filename_map[fileinfo.st_ctime] = filename;
+#endif
+    }
+    if (ctime_2_filename_map.size() < m_ini.log_store_file_num)
+        return xlog::RES_NO_ERROR;
+    int idx = 0;
+    for ( std::map<time_t, std::string>::reverse_iterator io = ctime_2_filename_map.rbegin(); io != ctime_2_filename_map.rend(); ++io )
+    {
+        if ( ++idx >= m_ini.log_store_file_num )
+        {
+            std::string filename = io->second;
+            remove(filename.c_str());
+        }
+    }
+    return xlog::RES_NO_ERROR;
 }
 
 int XLogWriter::start()
